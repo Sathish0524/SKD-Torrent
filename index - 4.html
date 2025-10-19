@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>SKD Torrent — Debuggable WebTorrent Demo</title>
+<script src="https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js"></script>
+<style>
+  :root{--bg:#09101a;--panel:#07131a;--accent:#06b6d4;--muted:#9aa8b3}
+  body{margin:0;font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,Arial;background:linear-gradient(#071021,#041221);color:#e6eef8;padding:20px}
+  .wrap{max-width:980px;margin:0 auto}
+  h1{color:var(--accent);margin:6px 0 2px}
+  p.small{color:var(--muted);margin:6px 0 14px;font-size:14px}
+  input[type=text]{width:74%;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:inherit;margin-right:6px}
+  .btn{padding:10px 12px;border-radius:8px;border:none;background:var(--accent);color:#012226;cursor:pointer}
+  .btn.alt{background:transparent;border:1px solid rgba(255,255,255,0.06);color:inherit}
+  .grid{display:grid;grid-template-columns:1fr 360px;gap:16px;margin-top:16px}
+  .panel{background:rgba(255,255,255,0.02);padding:12px;border-radius:10px}
+  #output video{width:100%;border-radius:8px;background:#000}
+  .progress-bar{height:10px;background:rgba(255,255,255,0.03);border-radius:8px;overflow:hidden;margin-top:8px}
+  .progress-bar > i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),#16a34a);transition:width .3s}
+  .log{background:#061019;color:#dbeefd;padding:8px;border-radius:8px;font-family:monospace;font-size:12px;height:300px;overflow:auto}
+  .hint{background:#0b1720;border-left:4px solid #f59e0b;padding:8px;border-radius:6px;margin-top:12px;color:#ffdca8}
+  .error{background:#2a1414;border-left:4px solid #ef4444;padding:8px;border-radius:6px;margin-top:12px;color:#ffdede}
+  details{margin-top:10px}
+  @media (max-width:900px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>SKD Torrent — Debug & Demo (HTML only)</h1>
+    <p class="small">This page runs <strong>entirely in your browser</strong> with WebTorrent. For most torrents you still need a server (webtorrent-hybrid) because browsers only speak WebRTC. Use the test torrent provided or paste a magnet with <code>wss://</code> trackers.</p>
+
+    <div>
+      <input id="magnetInput" type="text" placeholder="Paste magnet:?xt=... or http(s) .torrent URL" value="magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10&dn=Sintel&tr=wss://tracker.openwebtorrent.com&tr=wss://tracker.btorrent.xyz&tr=wss://tracker.fastcast.nz" />
+      <button id="playBtn" class="btn">Online Play</button>
+      <button id="dlBtn" class="btn alt">Download Files</button>
+      <button id="clearBtn" class="btn alt">Clear</button>
+    </div>
+
+    <div class="grid">
+      <div class="panel">
+        <div id="statusLine">Status: <strong id="status">idle</strong></div>
+        <div class="progress-bar" aria-hidden><i id="progress"></i></div>
+
+        <div id="output" style="margin-top:12px"></div>
+
+        <div class="hint" id="secureHint" style="display:none">
+          Your browser is in an insecure context (file:// or non-https). WebRTC may be blocked — open this page over <code>http://localhost</code> or <code>https</code> for WebTorrent to work reliably.
+        </div>
+
+        <div class="error" id="peerHint" style="display:none">
+          No WebRTC peers found. That usually means the torrent swarm does not include browser (WebRTC) peers or trackers. To stream arbitrary torrents you need a server (webtorrent-hybrid) or a hosted relay.
+        </div>
+
+        <details>
+          <summary>Quick debug steps (click)</summary>
+          <ol>
+            <li>Make sure you opened this file via <code>http://localhost</code> or hosted via HTTPS. <strong>file://</strong> is often blocked for WebRTC.</li>
+            <li>Try the default Sintel magnet above — it is a known WebRTC-friendly torrent.</li>
+            <li>Open DevTools Console to see any network/security errors.</li>
+          </ol>
+        </details>
+      </div>
+
+      <div class="panel">
+        <div style="font-weight:600;margin-bottom:8px">Debug log</div>
+        <div id="log" class="log"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  const client = new WebTorrent();
+  const defaultTrackers = [
+    'wss://tracker.openwebtorrent.com',
+    'wss://tracker.btorrent.xyz',
+    'wss://tracker.fastcast.nz',
+    'wss://tracker.webtorrent.io'
+  ];
+
+  const magnetInput = document.getElementById('magnetInput');
+  const playBtn = document.getElementById('playBtn');
+  const dlBtn = document.getElementById('dlBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const statusEl = document.getElementById('status');
+  const outputEl = document.getElementById('output');
+  const logEl = document.getElementById('log');
+  const progressBar = document.getElementById('progress');
+  const secureHint = document.getElementById('secureHint');
+  const peerHint = document.getElementById('peerHint');
+
+  function log(...args){ const s = args.map(x => (typeof x==='object' ? JSON.stringify(x) : String(x))).join(' '); const time = new Date().toLocaleTimeString(); logEl.innerText = `[${time}] ${s}\n` + logEl.innerText; }
+  function setStatus(s){ statusEl.innerText = s; log('STATUS', s); }
+
+  // Secure context check
+  function isSecureContextOrLocalhost(){
+    try{
+      if(location.protocol === 'file:') return false;
+      if(location.hostname === 'localhost' || location.hostname === '127.0.0.1') return true;
+      return window.isSecureContext === true;
+    }catch(e){ return false; }
+  }
+
+  if(!isSecureContextOrLocalhost()){
+    secureHint.style.display = 'block';
+    log('WARN: insecure context. Open via http://localhost or https for best results.');
+  }
+
+  function ensureTrackers(uri){
+    // if magnet-like and missing tr=, append default trackers
+    try{
+      if(!uri) return uri;
+      if(uri.startsWith('magnet:')){
+        if(!/[\?&]tr=/i.test(uri)){
+          const encoded = defaultTrackers.map(t => `tr=${encodeURIComponent(t)}`).join('&');
+          return uri + (uri.includes('?') ? '&' : '?') + encoded;
+        }
+      }
+      return uri;
+    }catch(e){ return uri; }
+  }
+
+  function humanBytes(n){
+    if(!n) return '—';
+    const units=['B','KB','MB','GB','TB']; let i=0;
+    while(n>=1024 && i<units.length-1){ n/=1024; i++; }
+    return Math.round(n*100)/100 + ' ' + units[i];
+  }
+
+  function onTorrent(torrent, streamMode){
+    outputEl.innerHTML = '';
+    peerHint.style.display = 'none';
+    setStatus('metadata received — files: ' + torrent.files.length);
+
+    log('TORRENT', { name: torrent.name, infoHash: torrent.infoHash });
+    // show files list
+    const filesDiv = document.createElement('div');
+    filesDiv.style.textAlign = 'left';
+    filesDiv.innerHTML = '<div style="font-weight:600;margin-bottom:6px">Files:</div>';
+    torrent.files.forEach((f, i) => {
+      const row = document.createElement('div');
+      row.style.marginBottom = '6px';
+      row.innerHTML = `<div>${escapeHtml(f.name)} — ${humanBytes(f.length)} <button data-index="${i}" class="btn alt small">Play</button> <button data-dl="${i}" class="btn alt small">Download</button></div>`;
+      filesDiv.appendChild(row);
+    });
+    outputEl.appendChild(filesDiv);
+
+    // auto-stream first playable if streamMode
+    if(streamMode){
+      const pref = torrent.files.find(f => /\.(mp4|webm|mkv|mp3|ogg)$/i.test(f.name));
+      if(pref) {
+        log('Auto-streaming file:', pref.name);
+        streamFile(pref);
+      } else {
+        outputEl.insertAdjacentHTML('beforeend','<div style="margin-top:8px;color:#cbd5e1">No common playable files were found.</div>');
+      }
+    }
+
+    // wire buttons (delegation)
+    filesDiv.addEventListener('click', (ev) => {
+      const btn = ev.target.closest('button');
+      if(!btn) return;
+      if(btn.hasAttribute('data-index')) {
+        const idx = parseInt(btn.getAttribute('data-index'),10);
+        const f = torrent.files[idx];
+        streamFile(f);
+      } else if(btn.hasAttribute('data-dl')) {
+        const idx = parseInt(btn.getAttribute('data-dl'),10);
+        const f = torrent.files[idx];
+        f.getBlobURL((err, url) => {
+          if(err){ log('getBlobURL error', err); alert('Download failed: '+err.message); return; }
+          const a = document.createElement('a'); a.href = url; a.download = f.name; document.body.appendChild(a); a.click(); a.remove();
+        });
+      }
+    });
+
+    // update loop
+    function update(){
+      const p = (torrent.progress*100).toFixed(2);
+      const peers = torrent.numPeers;
+      const speed = torrent.downloadSpeed;
+      progressBar.style.width = p + '%';
+      setStatus(`Peers: ${peers} | Progress: ${p}% | Speed: ${humanBytes(speed)}/s`);
+      // if zero peers for a long time show hint
+      if(peers === 0) peerHint.style.display = 'block';
+      else peerHint.style.display = 'none';
+    }
+    torrent.on('download', update);
+    torrent.on('done', () => { update(); setStatus('done'); log('Torrent done'); });
+    torrent.on('wire', () => { log('wire connected, wire count:', torrent.wires.length); update(); });
+    torrent.on('warning', (w)=> log('warning', w));
+    torrent.on('error', (e)=> { log('error', e); alert('Torrent error: '+(e && e.message ? e.message : e)); });
+
+    // quick update immediately
+    update();
+
+    function streamFile(file){
+      // remove previous player
+      const prev = document.querySelector('#output video, #output audio');
+      if(prev) prev.remove();
+      const isAudio = /\.(mp3|wav|ogg|m4a)$/i.test(file.name);
+      if(isAudio){
+        const audio = document.createElement('audio'); audio.controls = true; audio.autoplay = true; audio.style.width='100%';
+        outputEl.appendChild(audio);
+        file.appendTo(audio, (err) => { if(err) { log('appendTo audio error',err); alert('Stream error: '+err.message); }});
+      } else {
+        const video = document.createElement('video'); video.controls = true; video.autoplay = true;
+        outputEl.appendChild(video);
+        file.appendTo(video, (err) => { if(err) { log('appendTo video error',err); alert('Stream error: '+err.message); }});
+      }
+    }
+  }
+
+  function escapeHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  playBtn.addEventListener('click', ()=>{
+    const raw = (magnetInput.value||'').trim();
+    if(!raw) return alert('Paste a magnet link');
+    outputEl.innerHTML = ''; setStatus('adding torrent (play mode)...');
+    const magnet = ensureTrackers(raw);
+    log('Adding magnet (play):', magnet);
+    try{
+      client.add(magnet, (torrent) => onTorrent(torrent, true));
+    }catch(e){
+      log('client.add threw', e); alert('Failed to add torrent: '+ (e && e.message? e.message : e));
+    }
+  });
+
+  dlBtn.addEventListener('click', ()=>{
+    const raw = (magnetInput.value||'').trim();
+    if(!raw) return alert('Paste a magnet link');
+    outputEl.innerHTML = ''; setStatus('adding torrent (download mode)...');
+    const magnet = ensureTrackers(raw);
+    log('Adding magnet (download):', magnet);
+    try{
+      client.add(magnet, (torrent) => onTorrent(torrent, false));
+    }catch(e){
+      log('client.add threw', e); alert('Failed to add torrent: '+ (e && e.message? e.message : e));
+    }
+  });
+
+  clearBtn.addEventListener('click', ()=>{
+    outputEl.innerHTML = ''; progressBar.style.width = '0%'; setStatus('idle');
+    // destroy all torrents in client
+    client.torrents.slice().forEach(t => { try{ t.destroy(); }catch(e){ } });
+    log('Cleared all torrents');
+  });
+
+  // show runtime errors
+  window.addEventListener('unhandledrejection', e => { log('Unhandled rejection', e.reason); });
+  window.addEventListener('error', e => { log('Window error', e.message, e.filename+':'+e.lineno); });
+
+  // small runtime check
+  log('WebTorrent version', WebTorrent.VERSION);
+  log('Secure context?', isSecureContextOrLocalhost());
+})();
+</script>
+</body>
+</html>
