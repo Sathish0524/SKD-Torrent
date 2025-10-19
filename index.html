@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Skd Torrent</title>
+  <script src="https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js"></script>
+  <style>
+    :root {
+      --bg1: #060012;
+      --bg2: #0b1020;
+      --accent: #00e0ff;
+      --accent2: #ff00c8;
+      --text: #e8f4ff;
+      --muted: #9aa4b6;
+    }
+    body {
+      margin: 0;
+      font-family: 'Inter', system-ui, sans-serif;
+      background: radial-gradient(circle at top left, var(--bg1), var(--bg2));
+      color: var(--text);
+      min-height: 100vh;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    header {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    header h1 {
+      font-size: 2.6em;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      font-weight: 800;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+    }
+    header p {
+      font-size: 0.95em;
+      color: var(--muted);
+      margin: 0;
+    }
+    .panel {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 16px;
+      padding: 20px;
+      max-width: 880px;
+      width: 100%;
+      box-shadow: 0 0 25px rgba(0, 255, 255, 0.15);
+      backdrop-filter: blur(10px);
+      text-align: center;
+    }
+    input[type=text] {
+      width: 70%;
+      padding: 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(0,0,0,0.3);
+      color: var(--text);
+      font-size: 14px;
+      outline: none;
+      margin-bottom: 10px;
+    }
+    button {
+      padding: 12px 18px;
+      border-radius: 10px;
+      border: none;
+      cursor: pointer;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      color: #000;
+      font-weight: 600;
+      margin: 4px;
+      transition: all 0.25s ease;
+    }
+    button:hover {
+      transform: scale(1.05);
+      filter: brightness(1.15);
+    }
+    button.alt {
+      background: rgba(255,255,255,0.1);
+      color: var(--text);
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+    .progress-bar {
+      height: 10px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 8px;
+      overflow: hidden;
+      margin-top: 12px;
+    }
+    .progress-bar > i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      transition: width .3s;
+    }
+    #output video, #output audio {
+      width: 100%;
+      border-radius: 10px;
+      margin-top: 16px;
+      background: #000;
+    }
+    #log {
+      margin-top: 20px;
+      background: rgba(0,0,0,0.4);
+      padding: 10px;
+      border-radius: 10px;
+      font-size: 12px;
+      height: 200px;
+      overflow-y: auto;
+      font-family: monospace;
+      color: #b9d9ff;
+      text-align: left;
+    }
+    .hint {
+      background: #0b1720;
+      color: #ffdca8;
+      padding: 10px;
+      border-left: 4px solid #f59e0b;
+      border-radius: 8px;
+      margin-top: 12px;
+      display: none;
+      text-align: left;
+    }
+    footer {
+      margin-top: 20px;
+      font-size: 13px;
+      color: var(--muted);
+      text-align: center;
+    }
+    @media (max-width: 768px) {
+      input[type=text] { width: 100%; margin-bottom: 10px; }
+      button { width: 100%; margin-bottom: 6px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Skd Torrent</h1>
+    <p>Stream or download torrents instantly — browser-only, no server.</p>
+  </header>
+
+  <div class="panel">
+    <input id="magnetInput" type="text" placeholder="Paste magnet:?xt=... or HTTPS .torrent URL" />
+    <div>
+      <button id="playBtn">Play Online</button>
+      <button id="dlBtn" class="alt">Download</button>
+      <button id="testBtn" class="alt">Test Torrent</button>
+      <button id="clearBtn" class="alt">Clear</button>
+    </div>
+
+    <div id="status" style="margin-top:10px;color:#00e0ff;font-weight:600">Idle</div>
+    <div class="progress-bar"><i id="progress"></i></div>
+
+    <div id="output"></div>
+    <div class="hint" id="peerHint">⚠️ No WebRTC peers found for this torrent.  
+      Most torrents only support TCP/UDP peers. Try the “Test Torrent” to verify functionality.</div>
+    <div id="log"></div>
+  </div>
+
+  <footer>Made with ❤️ by Skd • Powered by WebTorrent</footer>
+
+<script>
+(function(){
+  const client = new WebTorrent();
+  const defaultTrackers = [
+    'wss://tracker.openwebtorrent.com',
+    'wss://tracker.btorrent.xyz',
+    'wss://tracker.fastcast.nz',
+    'wss://tracker.webtorrent.io'
+  ];
+
+  const els = {
+    magnetInput: document.getElementById('magnetInput'),
+    playBtn: document.getElementById('playBtn'),
+    dlBtn: document.getElementById('dlBtn'),
+    testBtn: document.getElementById('testBtn'),
+    clearBtn: document.getElementById('clearBtn'),
+    status: document.getElementById('status'),
+    progress: document.getElementById('progress'),
+    output: document.getElementById('output'),
+    peerHint: document.getElementById('peerHint'),
+    log: document.getElementById('log')
+  };
+
+  function log(...args){
+    const msg = args.map(a => (typeof a === 'object' ? JSON.stringify(a) : a)).join(' ');
+    els.log.innerText = `[${new Date().toLocaleTimeString()}] ${msg}\n` + els.log.innerText;
+  }
+
+  function setStatus(s){
+    els.status.innerText = s;
+    log('STATUS:', s);
+  }
+
+  function ensureTrackers(uri){
+    if (!uri) return uri;
+    if (uri.startsWith('magnet:') && !/[\?&]tr=/i.test(uri)) {
+      const tr = defaultTrackers.map(t => `tr=${encodeURIComponent(t)}`).join('&');
+      uri += (uri.includes('?') ? '&' : '?') + tr;
+    }
+    return uri;
+  }
+
+  function humanBytes(n){
+    if(!n) return '—';
+    const u = ['B','KB','MB','GB','TB']; let i=0;
+    while(n>=1024 && i<u.length-1){ n/=1024; i++; }
+    return (Math.round(n*100)/100)+' '+u[i];
+  }
+
+  function streamFile(file){
+    const prev = document.querySelector('#output video, #output audio');
+    if(prev) prev.remove();
+    const isAudio = /\.(mp3|wav|ogg|m4a)$/i.test(file.name);
+    const el = document.createElement(isAudio ? 'audio' : 'video');
+    el.controls = true; el.autoplay = true;
+    els.output.appendChild(el);
+    file.appendTo(el, err => { if(err) alert('Stream error: ' + err.message); });
+  }
+
+  function onTorrent(torrent, autoPlay){
+    setStatus('Metadata loaded — ' + torrent.files.length + ' file(s)');
+    els.output.innerHTML = '';
+    els.peerHint.style.display = 'none';
+
+    const filesList = document.createElement('div');
+    torrent.files.forEach((f,i) => {
+      const div = document.createElement('div');
+      div.style.marginTop = '8px';
+      div.innerHTML = `<strong>${f.name}</strong> — ${humanBytes(f.length)}
+        <button class='alt' data-play='${i}'>Play</button>
+        <button class='alt' data-dl='${i}'>Download</button>`;
+      filesList.appendChild(div);
+    });
+    els.output.appendChild(filesList);
+
+    filesList.addEventListener('click', ev=>{
+      const btn = ev.target.closest('button');
+      if(!btn) return;
+      const i = parseInt(btn.dataset.play ?? btn.dataset.dl);
+      const file = torrent.files[i];
+      if(btn.dataset.play !== undefined) streamFile(file);
+      else file.getBlobURL((err,url)=>{
+        if(err) return alert(err.message);
+        const a=document.createElement('a'); a.href=url; a.download=file.name; a.click();
+      });
+    });
+
+    if(autoPlay){
+      const first = torrent.files.find(f => /\.(mp4|webm|mkv|mp3|ogg)$/i.test(f.name));
+      if(first) streamFile(first);
+    }
+
+    torrent.on('download', update);
+    torrent.on('done', () => setStatus('Download complete'));
+    torrent.on('wire', update);
+
+    function update(){
+      const p=(torrent.progress*100).toFixed(2);
+      els.progress.style.width = p + '%';
+      setStatus(`Peers: ${torrent.numPeers} | ${p}% | Speed: ${humanBytes(torrent.downloadSpeed)}/s`);
+      if(torrent.numPeers === 0) els.peerHint.style.display = 'block';
+      else els.peerHint.style.display = 'none';
+    }
+  }
+
+  els.playBtn.onclick = () => {
+    const magnet = ensureTrackers(els.magnetInput.value.trim());
+    if(!magnet) return alert('Paste a magnet link');
+    els.output.innerHTML=''; setStatus('Connecting...');
+    client.add(magnet, t => onTorrent(t, true));
+  };
+
+  els.dlBtn.onclick = () => {
+    const magnet = ensureTrackers(els.magnetInput.value.trim());
+    if(!magnet) return alert('Paste a magnet link');
+    els.output.innerHTML=''; setStatus('Downloading...');
+    client.add(magnet, t => onTorrent(t, false));
+  };
+
+  els.testBtn.onclick = () => {
+    els.magnetInput.value = 'magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10&dn=Sintel&tr=wss://tracker.openwebtorrent.com&tr=wss://tracker.btorrent.xyz&tr=wss://tracker.fastcast.nz';
+    els.playBtn.click();
+  };
+
+  els.clearBtn.onclick = () => {
+    els.output.innerHTML=''; els.progress.style.width='0%';
+    client.torrents.forEach(t=>t.destroy());
+    setStatus('Idle');
+    els.peerHint.style.display = 'none';
+  };
+
+  log('WebTorrent Ready', WebTorrent.VERSION);
+})();
+</script>
+</body>
+</html>
